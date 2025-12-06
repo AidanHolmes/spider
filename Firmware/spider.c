@@ -3,6 +3,7 @@
  *
  * SPIder exposes two SPI interfaces to the Amiga through the clockport.
  */
+#include "hardware/clocks.h"
 #include "hardware/gpio.h"
 #include "hardware/spi.h"
 
