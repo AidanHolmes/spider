@@ -18,7 +18,7 @@
 // SemVer: Major.Minor.Patch.
 #define FIRMWARE_MAJOR_VERSION  1
 #define FIRMWARE_MINOR_VERSION  0
-#define FIRMWARE_PATCH_VERSION  0
+#define FIRMWARE_PATCH_VERSION  1
 
 // Identification.
 #define IDENT_SIZE              8
@@ -51,6 +51,7 @@
 #define PIN_SCK     18      // Output
 #define PIN_MOSI    19      // Output
 #define PIN_CDET    20      // Input    Pull-up     Card Detect
+#define PIN_EXINT   21      // Input    Interrupt
 
 // Application core commands.
 #define APC_NOP                 0
@@ -101,14 +102,16 @@ static uint32_t tx_feed_bytes_left;
 
 static inline void set_int_fired(uint8_t data)
 {
-    if (registers[REG_INT_FIRED])
-        return;
+    if (registers[REG_INT_FIRED] & data){
+        return; // already fired
+    }
 
-    if ((registers[REG_INT_ARMED] & data) == 0)
-        return;
+    if ((registers[REG_INT_ARMED] & data) == 0){
+        return; // not armed to fire
+    }
 
     gpio_set_dir_out_masked(1 << PIN_INT6);
-    registers[REG_INT_FIRED] = 1;
+    registers[REG_INT_FIRED] |= data;
 }
 
 static void handle_reset()
@@ -126,6 +129,7 @@ static void handle_reset()
     rx_discard_bytes_left = 0;
     tx_feed_bytes_left = 0;
 
+	registers[REG_STATUS] = STATUS_RX_DISCARD_EMPTY;
     registers[REG_RX_HEAD] = 0;
     registers[REG_RX_TAIL] = 0;
     registers[REG_TX_HEAD] = 0;
@@ -136,7 +140,7 @@ static void handle_reset()
 
 static void handle_spi_freq(uint32_t data)
 {
-    uint32_t freq = data < 128 ? (data * TEN_KHZ) : ((data - 128) * ONE_MHZ);
+    uint32_t freq = data <= 128 ? (data * TEN_KHZ) : ((data - 128) * ONE_MHZ);
 
     logger_info("SPI_FREQ, freq=%d\n", freq);
 
@@ -158,6 +162,10 @@ static void handle_rx_discard(uint32_t data)
     uint32_t increment = (upper_byte << 8) | (data & 0xff);
     rx_discard_bytes_left += increment;
     upper_byte = 0;
+	
+	if (rx_discard_bytes_left){
+		registers[REG_STATUS] &= ~STATUS_RX_DISCARD_EMPTY;
+	}
 }
 
 static void handle_tx_feed(uint32_t data)
@@ -192,12 +200,15 @@ static void handle_apc_cmd()
 
 static void handle_gpio_interrupts()
 {
-    uint8_t card_detect = (gpio_get_all() & (1 << PIN_CDET)) == 0 ? 1 : 0;
+    uint8_t card_detect = (gpio_get_all() & (1 << PIN_CDET)) == 0 ? SPIDER_PINID(PIN_CDET) : 0;
 
-    if (card_detect != registers[REG_CARD_DETECT])
-    {
-        registers[REG_CARD_DETECT] = card_detect;
-        set_int_fired(IRQ_CD_CHANGED);
+    if (card_detect != (registers[REG_GPIOS] & SPIDER_PINID(PIN_CDET))){
+        if (card_detect){
+            registers[REG_GPIOS] |= SPIDER_PINID(PIN_CDET);
+        }else{
+            registers[REG_GPIOS] &= ~(SPIDER_PINID(PIN_CDET));
+        }
+        set_int_fired(SPIDER_PINID(PIN_CDET));
     }
 }
 
@@ -212,12 +223,17 @@ static void handle_fifo_data()
         {
             (void) spi_get_hw(spi0)->dr;
             rx_discard_bytes_left--;
+			
+			if (rx_discard_bytes_left == 0){
+				registers[REG_STATUS] |= STATUS_RX_DISCARD_EMPTY;
+			}
         }
         else
         {
             uint8_t next_rx_fifo_tail = rx_fifo_tail + 1;
-            if (next_rx_fifo_tail == registers[REG_RX_HEAD])
+            if (next_rx_fifo_tail == registers[REG_RX_HEAD]){
                 break; // No space in RX-FIFO.
+			}
 
             rx_fifo[rx_fifo_tail] = (uint8_t) spi_get_hw(spi0)->dr;
 
@@ -240,6 +256,7 @@ static void handle_fifo_data()
             tx_fifo_head++;
             registers[REG_TX_HEAD] = tx_fifo_head;
         }
+        // TX feed bytes used to drive clock for spi reads
         else if (tx_feed_bytes_left)
         {
             spi_get_hw(spi0)->dr = (uint32_t) 0xff;
@@ -258,6 +275,18 @@ static void drain_spi_rx()
     while (spi_is_readable(spi0))
     {
         (void) spi_get_hw(spi0)->dr;
+    }
+}
+
+void extintISR(uint gpio, uint32_t events)
+{
+    if (gpio == PIN_EXINT){
+        if ((gpio_get_all() & (1 << PIN_EXINT)) != 0){
+            registers[REG_GPIOS] |= SPIDER_PINID(PIN_EXINT);
+        }else{
+            registers[REG_GPIOS] &= ~(SPIDER_PINID(PIN_EXINT));
+        }
+        set_int_fired(SPIDER_PINID(PIN_EXINT));
     }
 }
 
@@ -442,12 +471,12 @@ state_write:
                 {
                     if ((address & 1) == 0) // 12 = REG_INT_FIRED
                     {
-                        registers[REG_INT_FIRED] = 0;
+                        registers[REG_INT_FIRED] = data ;
                         gpio_set_dir_in_masked(1 << PIN_INT6);
                     }
                     else // 13 = REG_INT_ARMED
                     {
-                        registers[REG_INT_ARMED] = data;
+                        registers[REG_INT_ARMED] = data ;
                     }
                 }
                 else
@@ -529,6 +558,11 @@ int __not_in_flash_func(main)()
     gpio_init(PIN_CDET);
     gpio_pull_up(PIN_CDET);
 
+    gpio_init(PIN_EXINT);
+    gpio_set_dir(PIN_EXINT, GPIO_IN);
+    gpio_disable_pulls(PIN_EXINT);
+    gpio_set_irq_enabled_with_callback(PIN_EXINT, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true, &extintISR);
+
     uint init_pins[] = {PIN_INT6, PIN_RD, PIN_WR, PIN_RESET};
 
     // Initialize D[7:0] and A[3:0].
@@ -557,11 +591,17 @@ int __not_in_flash_func(main)()
     rx_discard_bytes_left = 0;
     tx_feed_bytes_left = 0;
 
-    for (int i = 0; i < sizeof(registers); i++)
+    for (int i = 0; i < sizeof(registers); i++){
         registers[i] = 0;
+    }
 
-    registers[REG_CARD_DETECT] = (gpio_get_all() & (1 << PIN_CDET)) == 0 ? 1 : 0;
+    int allgpio = gpio_get_all();
+    // Set all of the remaining GPIO values (pins 20 to 28 on SPIder)
+    for(int i=CUSTOM_GPIO_START; i<(CUSTOM_GPIO_START+8);i++){
+       registers[REG_GPIOS] |= (allgpio & (1 << i))?SPIDER_PINID(i):0;
+    }
 
+	registers[REG_STATUS] = STATUS_RX_DISCARD_EMPTY;
     registers[REG_IDENT] = ident_data[0];
     ident_index = 0;
 

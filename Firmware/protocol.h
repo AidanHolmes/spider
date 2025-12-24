@@ -4,10 +4,10 @@
 // Definitions that are shared between Amiga and RP2040.
 
 // Clockport registers.
-#define REG_RESERVED_0          0
+#define REG_STATUS          	0
 #define REG_RESERVED_1          1
 #define REG_UPPER_LENGTH        2   // WO, Upper byte for lengths
-#define REG_CARD_DETECT         3   // RO, Read CD
+#define REG_GPIOS               3   // RO, Read CD
 #define REG_RX_HEAD             4   // RO
 #define REG_RX_TAIL             5   // RO
 #define REG_TX_HEAD             6   // RO
@@ -21,7 +21,11 @@
 #define REG_FIFO                14  // RW, Write to TX, Read from RX
 #define REG_IDENT               15  // RO
 
-// Interrupts.
-#define IRQ_CD_CHANGED          1
+// GPIOS
+#define CUSTOM_GPIO_START       20
+#define SPIDER_PINID(x)         (1 << (x-CUSTOM_GPIO_START))
+
+// Status flags
+#define STATUS_RX_DISCARD_EMPTY 	0x01
 
 #endif // _SPIDER_PROTOCOL_H
