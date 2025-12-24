@@ -165,6 +165,8 @@ static void handle_rx_discard(uint32_t data)
 	
 	if (rx_discard_bytes_left){
 		registers[REG_STATUS] &= ~STATUS_RX_DISCARD_EMPTY;
+	}else{
+		registers[REG_STATUS] |= STATUS_RX_DISCARD_EMPTY;
 	}
 }
 
