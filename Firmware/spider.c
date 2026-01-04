@@ -18,7 +18,7 @@
 // SemVer: Major.Minor.Patch.
 #define FIRMWARE_MAJOR_VERSION  1
 #define FIRMWARE_MINOR_VERSION  0
-#define FIRMWARE_PATCH_VERSION  1
+#define FIRMWARE_PATCH_VERSION  2
 
 // Identification.
 #define IDENT_SIZE              8
@@ -40,18 +40,19 @@
 #define SPI_RESET_FREQUENCY     (400*1000)
 
 //      Pin name    GPIO    Direction   Comment     Description
-#define PIN_D(x)    (0+x)   // In/out
-#define PIN_RESET   8       // Input    Active low
-#define PIN_INT6    9       // Output   Open collector
-#define PIN_A(x)    (10+x)  // Input
-#define PIN_RD      14      // Input    Active low
-#define PIN_WR      15      // Input    Active low
-#define PIN_MISO    16      // Input    Pull-up
-#define PIN_SS      17      // Output   Active low
-#define PIN_SCK     18      // Output
-#define PIN_MOSI    19      // Output
-#define PIN_CDET    20      // Input    Pull-up     Card Detect
-#define PIN_EXINT   21      // Input    Interrupt
+#define PIN_D(x)        (0+x)   // In/out
+#define PIN_RESET       8       // Input    Active low
+#define PIN_INT6        9       // Output   Open collector
+#define PIN_A(x)        (10+x)  // Input
+#define PIN_RD          14      // Input    Active low
+#define PIN_WR          15      // Input    Active low
+#define PIN_MISO        16      // Input    Pull-up
+#define PIN_SS          17      // Output   Active low
+#define PIN_SCK         18      // Output
+#define PIN_MOSI        19      // Output
+#define PIN_CDET        20      // Input    Pull-up     Card Detect
+#define PIN_EXINT       21      // Input    Interrupt
+#define PIN_USR_RESET   29      // Output   Reset       Configurable pin for output
 
 // Application core commands.
 #define APC_NOP                 0
@@ -61,6 +62,7 @@
 #define APC_TX_FEED             4
 #define APC_SPI_FREQ            5
 #define APC_SLAVE_SELECT        6
+#define APC_USR_RESET           7
 
 static uint8_t ident_data[IDENT_SIZE] = IDENT_BYTES;
 static uint8_t ident_index;
@@ -152,6 +154,11 @@ static void handle_slave_select(uint32_t data)
     gpio_put(PIN_SS, data == 1 ? 0 : 1);
 }
 
+static void handle_reset_pin(uint32_t data)
+{
+    gpio_put(PIN_USR_RESET, data != 0 ? 1 : 0);
+}
+
 static void handle_upper_byte(uint32_t data)
 {
     upper_byte = (uint8_t)data;
@@ -193,6 +200,7 @@ static void handle_apc_cmd()
             case APC_TX_FEED: handle_tx_feed(data); break;
             case APC_SPI_FREQ: handle_spi_freq(data); break;
             case APC_SLAVE_SELECT: handle_slave_select(data); break;
+            case APC_USR_RESET: handle_reset_pin(data); break;
             default: break;
         }
 
@@ -422,8 +430,9 @@ state_write:
             {
                 if ((address & 2) == 0)
                 {
-                    if ((address & 1) == 0) // 4
+                    if ((address & 1) == 0) // 4 REG_USR_RESET
                     {
+                        sio_hw->fifo_wr = (data << 8) | APC_USR_RESET;
                     }
                     else // 5
                     {
@@ -565,6 +574,10 @@ int __not_in_flash_func(main)()
     gpio_disable_pulls(PIN_EXINT);
     gpio_set_irq_enabled_with_callback(PIN_EXINT, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true, &extintISR);
 
+    gpio_init(PIN_USR_RESET);
+    gpio_put(PIN_USR_RESET, 1);
+    gpio_set_dir(PIN_USR_RESET, GPIO_OUT);
+
     uint init_pins[] = {PIN_INT6, PIN_RD, PIN_WR, PIN_RESET};
 
     // Initialize D[7:0] and A[3:0].
@@ -598,7 +611,7 @@ int __not_in_flash_func(main)()
     }
 
     int allgpio = gpio_get_all();
-    // Set all of the remaining GPIO values (pins 20 to 28 on SPIder)
+    // Set all of the remaining GPIO values (pins 20 to 27 on SPIder)
     for(int i=CUSTOM_GPIO_START; i<(CUSTOM_GPIO_START+8);i++){
        registers[REG_GPIOS] |= (allgpio & (1 << i))?SPIDER_PINID(i):0;
     }

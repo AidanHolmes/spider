@@ -8,6 +8,7 @@
 #define REG_RESERVED_1          1
 #define REG_UPPER_LENGTH        2   // WO, Upper byte for lengths
 #define REG_GPIOS               3   // RO, Read CD
+#define REG_RESET               4   // WO, Set value of reset pin
 #define REG_RX_HEAD             4   // RO
 #define REG_RX_TAIL             5   // RO
 #define REG_TX_HEAD             6   // RO
